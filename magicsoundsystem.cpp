@@ -9,7 +9,7 @@
 #include <proto/exec.h>
 
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 1.5 MagicSoundSystem.dll (31.05.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 1.6 MagicSoundSystem.dll (31.05.2024) by Steffen \"MagicSN\" Haeuser";
 
 #include "audio_utils.h"
 #include "magicsoundsystem_oggfile.h"
@@ -230,7 +230,7 @@ void AudioCallback_Ogg(SoundItem *sound, void *userdata, unsigned char *stream, 
             read = cvt.len_cvt;
         }                   
         // Mix the decoded audio chunk into the stream
-        SDL_MixAudio(stream, reinterpret_cast<unsigned char *>(stream), read, SDL_MIX_MAXVOLUME);
+        SDL_MixAudio(stream, reinterpret_cast<unsigned char *>(stream), read, (SDL_MIX_MAXVOLUME*sound->vol));
     }   
 }
 
@@ -250,12 +250,12 @@ void AudioCallback_MP3(SoundItem *sound, void *userdata, unsigned char *stream, 
             SDL_ConvertAudio(&cvt);
 
             // Mix the decoded audio chunk into the stream
-            SDL_MixAudio(stream, cvt.buf, cvt.len_cvt, SDL_MIX_MAXVOLUME);
+            SDL_MixAudio(stream, cvt.buf, cvt.len_cvt, (SDL_MIX_MAXVOLUME*sound->vol));
         } 
         else 
         {
             // No conversion needed, mix directly
-            SDL_MixAudio(stream, reinterpret_cast<unsigned char *>(pcm[0]), samples * sizeof(WORD), SDL_MIX_MAXVOLUME);
+            SDL_MixAudio(stream, reinterpret_cast<unsigned char *>(pcm[0]), samples * sizeof(WORD), (SDL_MIX_MAXVOLUME*sound->vol));
         }
 
         // Update sound position
@@ -344,7 +344,7 @@ void AudioCallback_Wav(SoundItem *sound, void *userdata, unsigned char *stream, 
             bytesRead = cvt.len_cvt;
         }		
 
-		SDL_MixAudio(stream, stream, bytesRead, SDL_MIX_MAXVOLUME);
+		SDL_MixAudio(stream, stream, bytesRead, (SDL_MIX_MAXVOLUME*sound->vol));
         // Update position
         sound->position += bytesRead;
     } 
@@ -364,8 +364,8 @@ void AudioCallback_Wav(SoundItem *sound, void *userdata, unsigned char *stream, 
                 sound->playing = 0;
             }
             return;
-        }
-        SDL_MixAudio(stream, sound->audioBuffer + sound->position, length, SDL_MIX_MAXVOLUME);
+        }	
+        SDL_MixAudio(stream, sound->audioBuffer + sound->position, length, (SDL_MIX_MAXVOLUME*sound->vol));
         sound->position += length;
         if (sound->looped && sound->position >= sound->audioLength) 
 		{
@@ -390,7 +390,7 @@ void AudioCallback_Midi(SoundItem *sound, void *userdata, unsigned char *stream,
         SDL_ConvertAudio(&cvt);
         bytesRead = cvt.len_cvt;
     }
-    SDL_MixAudio(stream, sound->midiBuffer, bytesRead, SDL_MIX_MAXVOLUME);
+    SDL_MixAudio(stream, sound->midiBuffer, bytesRead, (SDL_MIX_MAXVOLUME*sound->vol));
     sound->position += bytesRead;
     if (sound->looped && sound->position >= sound->audioLength) 
     {
