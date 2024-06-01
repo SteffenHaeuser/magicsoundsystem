@@ -38,6 +38,7 @@ extern "C" double (*MSS_GetMusicVolume)();
 extern "C" void (*MSS_SetMusicVolume)(double mvol);
 extern "C" int (*MSS_GetSoundOnOff)();
 extern "C" void (*MSS_SetWAVDirectory)(const char* dirname1, const char* dirname2)
+extern "C" void (*MSS_SetStreamThreshold)(int threshold);
 
 // Functions individual per Sound Source
 
@@ -71,6 +72,7 @@ extern "C" double MSS_GetMusicVolume();
 extern "C" void MSS_SetMusicVolume(double mvol);
 extern "C" int MSS_GetSoundOnOff();
 extern "C" void MSS_SetWAVDirectory(const char* dirname1, const char* dirname2);
+extern "C" void MSS_SetStreamThreshold(int threshold);
 
 // Functions individual per Sound Source
 

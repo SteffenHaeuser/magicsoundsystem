@@ -9,7 +9,7 @@
 #include <proto/exec.h>
 
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 1.6 MagicSoundSystem.dll (31.05.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 1.7 MagicSoundSystem.dll (01.06.2024) by Steffen \"MagicSN\" Haeuser";
 
 #include "audio_utils.h"
 #include "magicsoundsystem_oggfile.h"
@@ -34,6 +34,7 @@ int thechannels;
 int thefrequency;
 int theformat;
 int thesamples;
+int streamThreshold = 1024 * 1024;
 
 struct Library *MPEGABase = 0;
 
@@ -1028,6 +1029,11 @@ int LoadWAVStreaming(const char *file, SoundItem *sound)
     return 1;
 }
 
+extern "C" void MSS_SetStreamThreshold(int threshold)
+{
+	streamThreshold = threshold;
+}
+
 extern "C" void *MSS_LoadSample(const char* name)
 {
 	SoundItem *sound = 0;
@@ -1094,7 +1100,7 @@ extern "C" void *MSS_LoadSample(const char* name)
 			long fileSize = ftell(thefile);
 			fclose(thefile);				
 			
-			if (fileSize > 1024 * 1024) 
+			if ((fileSize > streamThreshold) && (streamThreshold != 0))
 			{ 
 				if (LoadWAVStreaming(wavpath, sound) != 1) 
 				{

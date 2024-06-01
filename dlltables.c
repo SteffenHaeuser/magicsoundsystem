@@ -23,6 +23,7 @@ double MSS_GetMusicVolume();
 void MSS_SetMusicVolume(double mvol);
 int MSS_GetSoundOnOff();
 void MSS_SetWAVDirectory(const char* dirname1, const char* dirname2);
+void MSS_SetStreamThreshold(int threshold);
 
 // Functions individual per Sound Source
 
@@ -89,6 +90,7 @@ dll_tExportSymbol DLL_ExportSymbols[]=
 	{MSS_LoadAudioFromMemory,"MSS_LoadAudioFromMemory"},
 	{MSS_SetWAVDirectory,"MSS_SetWAVDirectory"},
 	{MSS_SetLooped,"MSS_SetLooped"},
+	{MSS_SetStreamThreshold,"MSS_SetStreamThreshold"},
     {0,0}
 };
 
