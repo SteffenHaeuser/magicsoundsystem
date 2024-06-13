@@ -1,0 +1,3 @@
+ppc-amigaos-gcc -mmultiple -std=c++11 -fPIC -use-dynld -c magicsoundsystem.cpp -o magicsoundsystem.o
+ppc-amigaos-gcc -mmultiple -std=c++11 -fPIC -use-dynld -c audio_utils.cpp -o audio_utils.o
+ppc-amigaos-gcc -mmultiple -std=c++11 -fPIC -use-dynld audio_utils.o magicsoundsystem.o -o magicsoundsystem_os4.dll -lSDL2 -lstdc++ -shared -lvorbis -lvorbisfile -logg -lvorbis -lvorbisfile -logg -ltimidity -lm

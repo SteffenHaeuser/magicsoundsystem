@@ -20,6 +20,10 @@ const char *version_tag = "$VER: 1.7 MagicSoundSystem.dll (01.06.2024) by Steffe
 
 #include "dll.h"
 
+#ifdef __PPC__
+struct MpegaIFace *MPEGAIFace=0;
+#endif
+
 extern "C" typedef int (*MSS_OpenWaveFunc)(const char*, unsigned char**, unsigned int*, int);
 extern "C" typedef void (*MSS_CloseWaveFunc)(void*, void*);
 #ifndef ONLYCVERSION
@@ -34,7 +38,7 @@ int thechannels;
 int thefrequency;
 int theformat;
 int thesamples;
-int streamThreshold = 1024 * 1024;
+int streamThreshold = 1024*1024;
 
 struct Library *MPEGABase = 0;
 
@@ -238,8 +242,12 @@ void AudioCallback_Ogg(SoundItem *sound, void *userdata, unsigned char *stream, 
 void AudioCallback_MP3(SoundItem *sound, void *userdata, unsigned char *stream, int length) 
 {
     // For MP3 files, decode and mix audio data from stream
-	WORD *pcm[MPEGA_MAX_CHANNELS] = { nullptr, nullptr };
+	WORD *pcm[MPEGA_MAX_CHANNELS] = { NULL, NULL };
+#ifdef __amigaos4__
+    LONG samples = MPEGAIFace->MPEGA_decode_frame(sound->mp3_stream, (WORD*)pcm);
+#else	
     LONG samples = MPEGA_decode_frame(sound->mp3_stream, pcm);
+#endif
     if (samples > 0) 
     {
         SDL_AudioCVT cvt;
@@ -263,7 +271,11 @@ void AudioCallback_MP3(SoundItem *sound, void *userdata, unsigned char *stream, 
         sound->position += samples * sound->mp3_stream->channels * sizeof(short);
         if (sound->looped && sound->position >= sound->audioLength) 
         {
+#ifdef __amigaos4__
+            MPEGAIFace->MPEGA_seek(sound->mp3_stream, 0);
+#else			
             MPEGA_seek(sound->mp3_stream, 0);
+#endif		
             sound->position = 0;
         } 
         else if (!sound->looped && sound->position >= sound->audioLength) 
@@ -275,7 +287,11 @@ void AudioCallback_MP3(SoundItem *sound, void *userdata, unsigned char *stream, 
     {
         if (sound->looped) 
         {
+#ifdef __amigaos4__
+            MPEGAIFace->MPEGA_seek(sound->mp3_stream, 0);
+#else			
             MPEGA_seek(sound->mp3_stream, 0);
+#endif	
             sound->position = 0;
         } 
         else 
@@ -357,15 +373,15 @@ void AudioCallback_Wav(SoundItem *sound, void *userdata, unsigned char *stream, 
             sound->position += length;
             if (sound->looped && sound->position >= sound->audioLength) 
 			{
-                sound->position = 0; // Reset position to loop the sound
-            } 
+                sound->position = 0; // Reset position to loop the sound      
+			} 
 			else if (!sound->looped && sound->position >= sound->audioLength) 
 			{
                 sound->stopit = 1;
                 sound->playing = 0;
             }
             return;
-        }	
+        }		
         SDL_MixAudio(stream, sound->audioBuffer + sound->position, length, (SDL_MIX_MAXVOLUME*sound->vol));
         sound->position += length;
         if (sound->looped && sound->position >= sound->audioLength) 
@@ -451,11 +467,99 @@ extern "C" void MSS_SetAudioSystemLoaders(MSS_OpenWaveFunc loadWav, MSS_CloseWav
 int mid_inited = 0;
 extern "C" void MSS_SetWAVDirectory(const char* dirname1, const char* dirname2);
 					
+#include <proto/exec.h>
+#include <proto/dos.h>
+#include <proto/ahi.h>
+#include <dos/dos.h>
+#include <stdio.h>
+
+BOOL CheckAHIAudioMode() {
+#ifdef __amigaos4__
+	return true;
+#else
+    struct AHIRequest *AHIio;
+    struct MsgPort *AHImp;
+    struct Library *AHIBase;
+    struct AHIAudioCtrl *actrl;
+    ULONG speed;
+    int ahichannels;
+    int ahibits;
+
+    // Set defaults
+    speed = 22050;  // Default sample rate
+    ahichannels = 2;  // Default number of channels
+    ahibits = 16;  // Default bit depth
+
+    // Create AHI message port
+    if ((AHImp = CreateMsgPort()) == NULL) {
+        fprintf(stderr, "ERROR: Can't create AHI message port\n");
+        return FALSE;
+    }
+
+    // Create AHI IO request
+    if ((AHIio = (struct AHIRequest *)CreateIORequest(AHImp, sizeof(struct AHIRequest))) == NULL) {
+        fprintf(stderr, "ERROR: Can't create AHI io request\n");
+        return FALSE;
+    }
+
+    // Open AHI device
+    if (OpenDevice("ahi.device", AHI_NO_UNIT, (struct IORequest *)AHIio, 0) != 0) {
+        fprintf(stderr, "Can't open ahi.device\n");
+        return FALSE;
+    }
+
+    AHIBase = (struct Library *)AHIio->ahir_Std.io_Device;
+
+    // Allocate audio control
+    if ((actrl = AHI_AllocAudio(AHIA_AudioID, AHI_DEFAULT_ID,
+            AHIA_MixFreq, speed,
+            AHIA_Channels, 1,  // We always check for mono
+            AHIA_Sounds, 1,
+            TAG_END)) == NULL) {
+        fprintf(stderr, "Can't allocate audio\n");
+        return FALSE;
+    }
+
+    // Check bit depth
+    if (ahibits != 8 && ahibits != 16)
+        ahibits = 16;  // Default to 16-bit if not 8 or 16
+
+    // Check if stereo
+    ULONG type;
+    if (ahichannels == 1) {
+        if (ahibits == 16) 
+            type = AHIST_M16S;
+        else 
+            type = AHIST_M8S;
+    } else {
+        if (ahibits == 16) 
+            type = AHIST_S16S;
+        else 
+            type = AHIST_S8S;
+    }
+
+    // Clean up
+    CloseDevice((struct IORequest *)AHIio);
+    DeleteIORequest((struct IORequest *)AHIio);
+    DeleteMsgPort(AHImp);
+
+	AHI_FreeAudio(actrl);
+
+    // Check if stereo and at least 14 or 16-bit
+    if (ahibits >= 14 && type == AHIST_S16S)
+        return TRUE;
+    else
+        return FALSE;
+#endif	
+}					
+					
 extern "C" int MSS_SoundInit(int frequency)
 {
     SDL_AudioSpec spec;
 	
 	if ((!ENABLE_SOUND) || soundOn==false) return 0;
+
+	if (CheckAHIAudioMode()==0) return 0;
 	
 	MSS_SetWAVDirectory(0,0);
 	
@@ -463,9 +567,25 @@ extern "C" int MSS_SoundInit(int frequency)
 
 	if (!MPEGABase)
 	{
+#ifdef __amigaos4__
+	  IExec = (struct ExecIFace *)(*(struct ExecBase **)4)->MainInterface;
+		if (!(MPEGABase = IExec->OpenLibrary("mpega.library", 0)))
+		{
+		}
+		else 
+		{
+			MPEGAIFace = (struct MpegaIFace*)IExec->GetInterface(MPEGABase, "main", 1, NULL);
+			if (!MPEGAIFace)
+			{
+				IExec->CloseLibrary(MPEGABase);
+				MPEGABase=0;
+			}
+		}
+#else		
 		if (!(MPEGABase = OpenLibrary("mpega.library", 0)))
 		{
 		}
+#endif		
 	}
 
 	g_FXInitialized = 0;
@@ -530,7 +650,13 @@ extern "C" void MSS_SoundClose()
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
 	if (MPEGABase)
 	{
+#ifdef __amigaos4__
+		IExec = (struct ExecIFace *)(*(struct ExecBase **)4)->MainInterface;
+		IExec->DropInterface((struct Interface*)MPEGAIFace);
+		IExec->CloseLibrary(MPEGABase);
+#else		
 		CloseLibrary(MPEGABase);
+#endif	
 		MPEGABase = 0;
 	}
 	g_FXInitialized = 0;
@@ -680,7 +806,11 @@ extern "C" void MSS_Free(void *handle)
 			sound->playing = 0;			
 			if (sound->mp3_stream) 
 			{
+#ifdef __amigaos4__
+				MPEGAIFace->MPEGA_close(sound->mp3_stream);
+#else				
 				MPEGA_close(sound->mp3_stream);
+#endif			
 				sound->mp3_stream = 0;
 			}
 
@@ -757,7 +887,11 @@ extern "C" void *MSS_LoadStreamFromMemory(void *mem_ptr, int len, int stream_typ
         sound->mp3_buffer_size = 0;
         MPEGA_CTRL ctrl = {0}; 
 
+#ifdef __amigaos4__
+		MPEGA_STREAM *mp3_stream = MPEGAIFace->MPEGA_open((char *)mem_ptr, &ctrl);
+#else
 		MPEGA_STREAM *mp3_stream = MPEGA_open((char *)mem_ptr, &ctrl);
+#endif	
         if (!mp3_stream) 
 		{
             delete sound;
@@ -765,10 +899,18 @@ extern "C" void *MSS_LoadStreamFromMemory(void *mem_ptr, int len, int stream_typ
         }
 		
         WORD *pcm[MPEGA_MAX_CHANNELS] = { nullptr, nullptr };
+#ifdef __amigaos4__
+        LONG samples = MPEGAIFace->MPEGA_decode_frame(mp3_stream, (WORD*)pcm);
+#else		
         LONG samples = MPEGA_decode_frame(mp3_stream, pcm);
+#endif	
         if (samples < 0)
 		{
+#ifdef __amigaos4__
+            MPEGAIFace->MPEGA_close(mp3_stream);			
+#else
             MPEGA_close(mp3_stream);
+#endif		
             delete sound;
             return 0;
         }		
@@ -785,7 +927,11 @@ extern "C" void *MSS_LoadStreamFromMemory(void *mem_ptr, int len, int stream_typ
         sound->mp3_buffer = (unsigned char *)malloc(sound->mp3_buffer_size);
         if (!sound->mp3_buffer) 
 		{
+#ifdef __amigaos4__
+            MPEGAIFace->MPEGA_close(mp3_stream);			
+#else
             MPEGA_close(mp3_stream);
+#endif	
             delete sound;
             return 0;
         }
@@ -794,9 +940,17 @@ extern "C" void *MSS_LoadStreamFromMemory(void *mem_ptr, int len, int stream_typ
 		sound->audioLength = static_cast<unsigned int>((len * 8) / (mp3_stream->bitrate * 1000) * mp3_stream->frequency * mp3_stream->channels * sizeof(short));
         sound->playtime = static_cast<float>(len) / mp3_stream->bitrate;
 		
-        if (MPEGA_seek(mp3_stream, 0) != 0) 
+#ifdef __amigaos4__
+        if (MPEGAIFace->MPEGA_seek(mp3_stream, 0) != 0)
+#else		
+        if (MPEGA_seek(mp3_stream, 0) != 0)
+#endif			
 	    {
+#ifdef __amigaos4__
+            MPEGAIFace->MPEGA_close(mp3_stream);			
+#else
             MPEGA_close(mp3_stream);
+#endif	
             free(sound->mp3_buffer);
             delete sound;
             return 0;
@@ -872,6 +1026,66 @@ extern "C" void *MSS_LoadStreamFromMemory(void *mem_ptr, int len, int stream_typ
 
     return sound;
 }	
+
+bool MSS_LoadAIFF(const char* filename, SoundItem *sound, int *freq, int *channels, int *bitsPerSample) {
+    if (!filename || !sound) return false;
+
+    SDL_RWops* rw = SDL_RWFromFile(filename, "rb");
+    if (!rw) {
+        fprintf(stderr, "Failed to open AIFF file: %s\n", SDL_GetError());
+        return false;
+    }
+
+    // Get the size of the file
+    SDL_RWseek(rw, 0, RW_SEEK_END);
+    size_t fileSize = SDL_RWtell(rw);
+    SDL_RWseek(rw, 0, RW_SEEK_SET);
+
+    // Read the entire file into memory
+    Uint8 *buffer = (Uint8*)malloc(fileSize);
+    if (!buffer) {
+        fprintf(stderr, "Failed to allocate memory for AIFF file\n");
+        SDL_RWclose(rw);
+        return false;
+    }
+    SDL_RWread(rw, buffer, 1, fileSize);
+    SDL_RWclose(rw);
+
+    // Assume the AIFF parameters
+    *freq = 44100;
+    *channels = 2;
+    *bitsPerSample = 16;
+
+    // Assign the loaded data to the sound structure
+    sound->audioBuffer = buffer;
+    sound->audioLength = fileSize;
+
+    // Assign the audio specification
+    sound->spec.freq = *freq;
+    sound->spec.format = AUDIO_S16SYS;
+    sound->spec.channels = *channels;
+    sound->spec.callback = AudioCallback;
+    sound->spec.userdata = sound;
+    sound->playing = false;
+
+    // Use SDL audio conversion to ensure correct format
+    SDL_AudioCVT audioCvt;
+    SDL_BuildAudioCVT(&audioCvt, AUDIO_S16SYS, *channels, *freq, AUDIO_S16SYS, thechannels, thefrequency);
+    audioCvt.len = fileSize;
+    audioCvt.buf = (Uint8*)malloc(fileSize * audioCvt.len_mult);
+    if (!audioCvt.buf) {
+        fprintf(stderr, "Failed to allocate memory for audio conversion\n");
+        free(buffer);
+        return false;
+    }
+    memcpy(audioCvt.buf, buffer, fileSize);
+    SDL_ConvertAudio(&audioCvt);
+
+    sound->audioBuffer = audioCvt.buf;
+    sound->audioLength = audioCvt.len_cvt;
+
+    return true;
+}
 
 extern "C" char* MSS_LoadFileToMemory(const char* filename, size_t& fileSize);
 
@@ -1029,11 +1243,6 @@ int LoadWAVStreaming(const char *file, SoundItem *sound)
     return 1;
 }
 
-extern "C" void MSS_SetStreamThreshold(int threshold)
-{
-	streamThreshold = threshold;
-}
-
 extern "C" void *MSS_LoadSample(const char* name)
 {
 	SoundItem *sound = 0;
@@ -1100,7 +1309,7 @@ extern "C" void *MSS_LoadSample(const char* name)
 			long fileSize = ftell(thefile);
 			fclose(thefile);				
 			
-			if ((fileSize > streamThreshold) && (streamThreshold != 0))
+			if ((fileSize > streamThreshold) && (streamThreshold!=0))
 			{ 
 				if (LoadWAVStreaming(wavpath, sound) != 1) 
 				{
@@ -1163,8 +1372,11 @@ extern "C" void *MSS_LoadSample(const char* name)
 	}
 	else if ((strstr(name, ".aiff"))||(strstr(name,".AIFF")))
 	{
-		delete sound;
-		return 0;
+		if (!MSS_LoadAIFF(name, sound, &freq, &channels, &bitsPerSample))
+		{
+			delete sound;
+			return 0;			
+		}		
 	}
 	else if ((strstr(name, ".midi"))||(strstr(name,".MIDI"))||(strstr(name, ".mid"))||(strstr(name,".MID")))
 	{
@@ -1249,6 +1461,11 @@ extern "C" void *MSS_LoadSample(const char* name)
 	g_FXsounds.push_back(sound);
 
 	return sound;
+}
+
+extern "C" void MSS_SetStreamThreshold(int threshold)
+{
+	streamThreshold = threshold;
 }
 
 extern "C" void *MSS_LoadAudioFromMemory(const char* audioBuffer, unsigned int audioLength, int channels, int freq, int bitsPerSample)
