@@ -46,6 +46,25 @@ void* MSS_LoadStreamToSoundFX(const char *filename);
 int MSS_OpenWave(const char* name, unsigned char** vbuffer, unsigned int* size, int UsedInWindowsOnly);
 void MSS_CloseWave(void* audioBuffer, void *fileBuffer);
 
+// Non-Sound functions
+
+unsigned long MSS_GetTicks();
+void *MSS_AddTimer(unsigned int interval, unsigned int * (*callback)(unsigned int, void *), void *param);
+void MSS_RemoveTimer(void *timerid);
+void MSS_Flip(void *screen);
+void *MSS_OpenScreen(int width, int height, int depth, int fullscreen, char *title);
+void MSS_CloseScreen(void *screen);
+void MSS_SetColors(void *screen, int startCol, int skipCols, int numCols, unsigned char *rvalues, unsigned char *gvalues, unsigned char *bvalues);
+int MSS_GetMouseState(int *x, int *y);
+int MSS_PeepKeyDownEvent(struct MssEvent *event);
+void MSS_PumpEvents();
+int MSS_PollEvent(struct MssEvent *event);
+void MSS_FillRect(void *screen, int col, int x, int y, int width, int height);
+void MSS_ShowCursor(int enable);
+void MSS_LockScreen(void *screen);
+void MSS_UnlockScreen(void *screen);
+void MSS_CloseDown();
+
 void*  dllFindResource(int id, char *pType)
 {
     return NULL;
@@ -91,6 +110,22 @@ dll_tExportSymbol DLL_ExportSymbols[]=
 	{MSS_SetWAVDirectory,"MSS_SetWAVDirectory"},
 	{MSS_SetLooped,"MSS_SetLooped"},
 	{MSS_SetStreamThreshold,"MSS_SetStreamThreshold"},
+	{MSS_AddTimer,"MSS_AddTimer"},
+	{MSS_RemoveTimer,"MSS_RemoveTimer"},
+	{MSS_GetTicks,"MSS_GetTicks"},
+	{MSS_OpenScreen,"MSS_OpenScreen"},
+	{MSS_CloseScreen,"MSS_CloseScreen"},
+	{MSS_Flip,"MSS_Flip"},
+	{MSS_SetColors,"MSS_SetColors"},
+	{MSS_GetMouseState,"MSS_GetMouseState"},
+	{MSS_PeepKeyDownEvent,"MSS_PeepKeyDownEvent"},
+	{MSS_PumpEvents,"MSS_PumpEvents"},
+	{MSS_PollEvent,"MSS_PollEvent"},
+	{MSS_FillRect,"MSS_FillRect"},
+	{MSS_ShowCursor,"MSS_ShowCursor"},
+	{MSS_LockScreen,"MSS_LockScreen"},
+	{MSS_UnlockScreen,"MSS_UnlockScreen"},
+	{MSS_CloseDown,"MSS_CloseDown"},
     {0,0}
 };
 
