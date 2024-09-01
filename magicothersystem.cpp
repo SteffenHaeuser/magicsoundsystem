@@ -45,14 +45,25 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
 	
 	if (!screen) return 0;
 	
+#ifdef USEAGA	
 	if (fullscreen)
 	{
-		screen = SDL_SetVideoMode(width, height, depth, SDL_FULLSCREEN | SDL_HWPALETTE);
+		screen = SDL_SetVideoMode(width, height, depth, SDL_FULLSCREEN | SDL_HWPALETTE);//|SDL_HWSURFACE|SDL_DOUBLEBUF);
 	}
 	else
 	{
-		screen = SDL_SetVideoMode(width, height, depth, SDL_HWPALETTE);		
+		screen = SDL_SetVideoMode(width, height, depth, SDL_HWPALETTE);//|SDL_HWSURFACE|SDL_DOUBLEBUF);		
 	}
+#else
+	if (fullscreen)
+	{
+		screen = SDL_SetVideoMode(width, height, depth, SDL_FULLSCREEN | SDL_HWPALETTE|SDL_HWSURFACE|SDL_DOUBLEBUF);
+	}
+	else
+	{
+		screen = SDL_SetVideoMode(width, height, depth, SDL_HWPALETTE|SDL_HWSURFACE|SDL_DOUBLEBUF);		
+	}	
+#endif	
 	
 	if (!screen) return 0;
 	
@@ -177,3 +188,42 @@ extern "C" void MSS_UnlockScreen(void *screen)
 {
 	SDL_UnlockSurface((SDL_Surface*)screen);
 }
+
+#include <SDL/SDL_syswm.h>
+
+#ifdef __PPC__
+extern "C" void* MSS_GetWindow(void *window) 
+{
+    SDL_SysWMinfo wmInfo;
+    struct Window *amigaWindow = NULL;
+
+    // Initialize SDL_SysWMinfo structure
+    SDL_VERSION(&wmInfo.version);
+    
+    // Get the window manager info
+    if (SDL_GetWindowWMInfo((SDL_Window*)window, &wmInfo)) {
+        // Check platform-specific data
+        amigaWindow = (struct Window *)wmInfo.info.os4.window;
+    } 
+
+    return (void *)amigaWindow;
+}
+#else
+extern "C" void* MSS_GetWindow(void *screen) 
+{
+/*    SDL_SysWMinfo wmInfo;
+    struct Window *amigaWindow = NULL;
+
+    // Initialize the SDL_SysWMinfo structure
+    SDL_VERSION(&wmInfo.version);
+
+    // Get the window manager info
+    if (SDL_GetWMInfo(&wmInfo)) {
+        // The `window` field is directly available in SDL 1.2's SysWMinfo
+        amigaWindow = (struct Window *)wmInfo.window;
+    }
+
+    return (void *)amigaWindow;*/
+	return 0;
+}	
+#endif

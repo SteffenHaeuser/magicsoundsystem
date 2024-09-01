@@ -1,5 +1,5 @@
-m68k-amigaos-gcc -noixemul -m68030 -msoft-float -c magicsoundsystem.cpp -o magicsoundsystem.o
-m68k-amigaos-gcc -noixemul -m68040 -msoft-float -c magicothersystem.cpp -o magicothersystem.o
+m68k-amigaos-gcc -DUSEAGA -DNOFPU -noixemul -m68030 -msoft-float -c magicsoundsystem.cpp -o magicsoundsystem.o
+m68k-amigaos-gcc -DUSEAGA -noixemul -m68040 -msoft-float -c magicothersystem.cpp -o magicothersystem.o
 m68k-amigaos-gcc -noixemul -m68040 -msoft-float -c audio_utils.cpp -o audio_utils.o
 m68k-amigaos-gcc -noixemul -m68040 -msoft-float -c dll.c -o dll.o
 m68k-amigaos-gcc -noixemul -m68040 -msoft-float -c dllimport.c -o dllimport.o

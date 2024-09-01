@@ -8,8 +8,18 @@
 #include <libraries/mpega.h>
 #include <proto/exec.h>
 
+#ifdef USEAGA
+#ifdef NOFPU
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 2.1 MagicSystem.dll (30.07.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 2.3 MagicSystem.dll (AGA, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+#else
+char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
+const char *version_tag = "$VER: 2.3 MagicSystem.dll (AGA+FPU, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+#endif
+#else
+char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
+const char *version_tag = "$VER: 2.3 MagicSystem.dll (RTG, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+#endif
 
 #include "audio_utils.h"
 #include "magicsoundsystem_oggfile.h"
@@ -684,7 +694,8 @@ extern "C" void MSS_Play(void *handle, double _vol, double _pan, int looped, boo
 		if (_vol<=0.0) return;		
 		sound->vol = _vol;
 		sound->pan = _pan;
-		sound->position = 0;	
+		sound->position = 0;
+		sound->stopit = 0;
 		sound->looped = (looped != 0);
 		SDL_PauseAudio(0);
 		sound->playing = true;	
