@@ -11,14 +11,19 @@
 #ifdef USEAGA
 #ifdef NOFPU
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 2.3 MagicSystem.dll (AGA, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 2.4 MagicSystem.dll (AGA, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
 #else
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 2.3 MagicSystem.dll (AGA+FPU, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 2.4 MagicSystem.dll (AGA+FPU, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
 #endif
 #else
+#ifdef NODBUF
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 2.3 MagicSystem.dll (RTG, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 2.4 MagicSystem.dll (RTG, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+#else
+char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
+const char *version_tag = "$VER: 2.4 MagicSystem.dll (RTG+DBuffering, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+#endif
 #endif
 
 #include "audio_utils.h"

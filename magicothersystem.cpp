@@ -55,6 +55,16 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
 		screen = SDL_SetVideoMode(width, height, depth, SDL_HWPALETTE);//|SDL_HWSURFACE|SDL_DOUBLEBUF);		
 	}
 #else
+#ifdef NODBUF
+	if (fullscreen)
+	{
+		screen = SDL_SetVideoMode(width, height, depth, SDL_FULLSCREEN | SDL_HWPALETTE);
+	}
+	else
+	{
+		screen = SDL_SetVideoMode(width, height, depth, SDL_HWPALETTE);		
+	}	
+#else	
 	if (fullscreen)
 	{
 		screen = SDL_SetVideoMode(width, height, depth, SDL_FULLSCREEN | SDL_HWPALETTE|SDL_HWSURFACE|SDL_DOUBLEBUF);
@@ -63,6 +73,7 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
 	{
 		screen = SDL_SetVideoMode(width, height, depth, SDL_HWPALETTE|SDL_HWSURFACE|SDL_DOUBLEBUF);		
 	}	
+#endif
 #endif	
 	
 	if (!screen) return 0;
