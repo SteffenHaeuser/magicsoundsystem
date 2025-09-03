@@ -64,6 +64,8 @@ void MSS_ShowCursor(int enable);
 void MSS_LockScreen(void *screen);
 void MSS_UnlockScreen(void *screen);
 void MSS_CloseDown();
+void* MSS_GetWindow(void *window) ;
+void MSS_DrawArray(void *screen, unsigned char* src, unsigned int x, unsigned int y, unsigned int w, unsigned int h, unsigned int srcwidth, unsigned int dstwidth);
 
 void*  dllFindResource(int id, char *pType)
 {
@@ -126,6 +128,8 @@ dll_tExportSymbol DLL_ExportSymbols[]=
 	{MSS_LockScreen,"MSS_LockScreen"},
 	{MSS_UnlockScreen,"MSS_UnlockScreen"},
 	{MSS_CloseDown,"MSS_CloseDown"},
+	{MSS_GetWindow,"MSS_GetWindow"},
+	{MSS_DrawArray,"MSS_DrawArray"},
     {0,0}
 };
 

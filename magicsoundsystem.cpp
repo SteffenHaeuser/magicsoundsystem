@@ -11,18 +11,23 @@
 #ifdef USEAGA
 #ifdef NOFPU
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 2.4 MagicSystem.dll (AGA, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 3.1 MagicSystem.dll (AGA, 05.10.2024) by Steffen \"MagicSN\" Haeuser";
 #else
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 2.4 MagicSystem.dll (AGA+FPU, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 3.1 MagicSystem.dll (AGA+FPU, 05.10.2024) by Steffen \"MagicSN\" Haeuser";
 #endif
 #else
 #ifdef NODBUF
+#ifdef NOFPU
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 2.4 MagicSystem.dll (RTG, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 3.1 MagicSystem.dll (RTG/NoFPU, 05.10.2024) by Steffen \"MagicSN\" Haeuser";
 #else
 char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
-const char *version_tag = "$VER: 2.4 MagicSystem.dll (RTG+DBuffering, 01.09.2024) by Steffen \"MagicSN\" Haeuser";
+const char *version_tag = "$VER: 3.1 MagicSystem.dll (RTG, 05.10.2024) by Steffen \"MagicSN\" Haeuser";
+#endif
+#else
+char __attribute__((used)) stackcookie[] = "$STACK: 2000000";
+const char *version_tag = "$VER: 3.1 MagicSystem.dll (RTG+DBuffering, 05.10.2024) by Steffen \"MagicSN\" Haeuser";
 #endif
 #endif
 
@@ -309,8 +314,10 @@ void AudioCallback_Wav(SoundItem *sound, void *userdata, unsigned char *stream, 
 	{
         WavStreamData *streamData = (WavStreamData *)sound->extradata;
 
-        // Check if we reached the end of the file
-        if (sound->position >= sound->audioLength) 
+		int endval;
+		if (sound->audioLength>1000000) endval = 1024;
+		else endval = 0;
+        if (sound->position >= sound->audioLength-endval) 
 		{
             // If looped, reset position to loop the sound
             if (sound->looped) 
@@ -554,11 +561,11 @@ extern "C" int MSS_SoundInit(int frequency)
 	
 	if ((!ENABLE_SOUND) || soundOn==false) return 0;
 	
-	if (!CheckAHIAudioMode()) return 0;
+	//if (!CheckAHIAudioMode()) return 0;
 	
 	MSS_SetWAVDirectory(0,0);
 	
-	if ((frequency!=22050)&&(frequency!=44100)) return 0;
+	if ((frequency!=22050)&&(frequency!=44100)&&(frequency!=11025)) return 0;
 
 	if (!MPEGABase)
 	{
@@ -578,8 +585,9 @@ extern "C" int MSS_SoundInit(int frequency)
     spec.freq = frequency;
     spec.format = AUDIO_S16;
     spec.channels = 2;
-    if (frequency == 22050) spec.samples = 512; 
-	else spec.samples = 1024;
+    if (frequency == 22050) spec.samples = 1024; 
+	else if (frequency == 11025) spec.samples = 512;
+	else spec.samples = 2048;
     spec.callback = AudioCallback;
     spec.userdata = 0;
 	thechannels = 2;

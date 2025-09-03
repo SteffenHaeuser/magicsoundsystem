@@ -193,6 +193,8 @@ extern "C" void (*MSS_ShowCursor)(int enable);
 extern "C" void (*MSS_LockScreen)(void *screen);
 extern "C" void (*MSS_UnlockScreen)(void *screen);
 extern "C" void (*MSS_CloseDown)();
+extern "C" void *(*MSS_GetWindow)(void *window); 
+extern "C" void (*MSS_DrawArray)(void *screen, unsigned char* src, unsigned int x, unsigned int y, unsigned int w, unsigned int h, unsigned int srcwidth, unsigned int dstwidth);
 #else
 extern "C" void *MSS_LoadStreamFromMemory(void *mem_ptr, int len, int stream_type);
 extern "C" void *MSS_LoadSample(const char* name);
@@ -246,6 +248,8 @@ extern "C" void MSS_ShowCursor(int enable);
 extern "C" void MSS_LockScreen(void *screen);
 extern "C" void MSS_UnlockScreen(void *screen);
 extern "C" void MSS_CloseDown();
+extern "C" void* MSS_GetWindow(void *window);
+extern "C" void MSS_DrawArray(void *screen, unsigned char* src, unsigned int x, unsigned int y, unsigned int w, unsigned int h, unsigned int srcwidth, unsigned int dstwidth);
 #endif
 
 // Utility functions
