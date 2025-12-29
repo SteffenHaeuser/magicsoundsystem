@@ -22,6 +22,8 @@
 #include <graphics/rastport.h>
 #include <intuition/intuition.h>
 #include <stdio.h>
+#include <proto/lowlevel.h>
+#include <libraries/lowlevel.h>
 
 struct Screen *wbScreen;
 ULONG *originalColors = NULL;  // Array to hold original colors
@@ -204,6 +206,7 @@ void pushEventToQueue(struct MssEvent event)
         eventQueueEnd = (eventQueueEnd + 1) % MAX_EVENTS;
     } else 
 	{
+		eventQueueStart = (eventQueueStart + 1) % MAX_EVENTS;
     }
 }
 
@@ -224,15 +227,19 @@ struct MssAmigaScreen {
     struct Screen *screen;  // Pointer to the screen (custom or Workbench)
     struct Window *window;  // Pointer to the window (only used in non-fullscreen mode)
     int fullscreen;         // Flag to track if fullscreen mode is active (1 = fullscreen, 0 = windowed)
-    ULONG videoMemoryAddress; // Address of first Bitplane
-    UWORD *originalPointerShape;
-    int width; 
-    int height;
-    struct BitMap *bitMap;  // Common BitMap for both buffers
+	ULONG videoMemoryAddress; // Address of first Bitplane
+	UWORD *originalPointerShape;
+	int width;
+	int height;
+	struct BitMap *bitMap;  // Common BitMap for both buffers
     struct ScreenBuffer *screenBuffers[2];  // Two buffers for double buffering
     struct RastPort rastPort;  // RastPort for drawing
     BOOL bufferToggle;         // Used to track which buffer is active	
-    void *pointer;
+	void *pointer;
+#ifdef USEGRAFFITI
+    UBYTE *framebuffer;
+    ULONG bytesPerRow;
+#endif
 };
 
 struct MssAmigaScreen *mssAmigaScreen = 0;
@@ -240,7 +247,7 @@ struct MssAmigaScreen *mssAmigaScreen = 0;
 extern "C" unsigned long MSS_GetTicks()
 {
 #ifdef __amigaos4__
-    return SDL_GetTicks();
+	return SDL_GetTicks();
 #else
     struct timeval time;
     gettimeofday(&time, NULL);
@@ -294,6 +301,11 @@ extern "C" void MSS_CloseScreen(void *screenHandle)
     // Free the structure
     free(amigaScreen);
 	mssAmigaScreen = 0;
+	if (LowLevelBase)
+	{
+		CloseLibrary(LowLevelBase);
+		LowLevelBase = 0;
+	}
 }
 
 #ifndef USEAGA
@@ -302,6 +314,79 @@ extern "C" void MSS_CloseScreen(void *screenHandle)
 int usingAGA = 0;
 int firstTimeConfig = 0;
 int usingWCP = 1;
+
+static int ModeFitsWidthExactHeightMin(int storedW, int storedH, int reqW, int reqH)
+{
+    return (storedW == reqW) && (storedH >= reqH);
+}
+
+#include <proto/asl.h>
+#include <libraries/asl.h>
+
+static int RequestScreenModeWidthExact(ULONG initialMode,
+                                       int reqW, int reqH,
+                                       ULONG *outMode, int *outW, int *outH)
+{
+    struct ScreenModeRequester *smr =
+        (struct ScreenModeRequester*)AllocAslRequestTags(ASL_ScreenModeRequest,
+            ASLSM_InitialDisplayID, initialMode,
+
+            ASLSM_MinWidth,        reqW,
+            ASLSM_MaxWidth,        reqW,   // <- Breite EXAKT
+
+            ASLSM_MinHeight,       reqH,   // <- Höhe MINDESTENS
+            // ASLSM_MaxHeight weglassen -> darf größer sein
+
+            ASLSM_MinDepth,        8,
+            ASLSM_MaxDepth,        8,
+            TAG_DONE);
+
+    if (!smr) return 0;
+
+    int ok = AslRequest(smr, NULL);
+    if (ok)
+    {
+        *outMode = smr->sm_DisplayID;
+        *outW    = (int)smr->sm_DisplayWidth;
+        *outH    = (int)smr->sm_DisplayHeight;
+    }
+
+    FreeAslRequest(smr);
+    return ok;
+}
+
+static int LoadModeFile(const char *path, ULONG *modeId, int *mw, int *mh)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+
+    unsigned long mid = 0;
+    int w = 0, h = 0;
+    int ok = (fscanf(f, "%lx %d %d", &mid, &w, &h) == 3);
+    fclose(f);
+
+    if (!ok) return 0;
+    *modeId = (ULONG)mid;
+    *mw = w;
+    *mh = h;
+    return 1;
+}
+
+static void SaveModeFile(const char *path, ULONG modeId, int w, int h)
+{
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "0x%08lx %d %d\n", (unsigned long)modeId, w, h);
+    fclose(f);
+}
+
+static int FileExists(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (f) { fclose(f); return 1; }
+    return 0;
+}
+
 
 ULONG GetMode(int w, int h)
 {
@@ -316,6 +401,46 @@ ULONG GetMode(int w, int h)
 #else
 	usingAGA = 1;
 #endif
+
+if (FileExists("env:Settlers2/UseReq"))
+{
+    const int isMenu = (w == 640);  // “Menu” Slot per Breite erkennbar
+    const char *slotPath = isMenu ? "env:Settlers2/ModeMenu"
+                                  : "env:Settlers2/ModeGame";
+
+    ULONG storedMode = INVALID_ID;
+    int storedW = 0, storedH = 0;
+
+    int haveStored = LoadModeFile(slotPath, &storedMode, &storedW, &storedH);
+
+    if (haveStored && storedMode != INVALID_ID &&
+        ModeFitsWidthExactHeightMin(storedW, storedH, w, h))
+    {
+        return storedMode;
+    }
+
+    // Requester solange wiederholen, bis Breite exakt und Höhe >= reqH oder Abbruch
+    ULONG pickedMode = haveStored ? storedMode : INVALID_ID;
+    int pickedW = 0, pickedH = 0;
+
+    for (;;)
+    {
+        if (!RequestScreenModeWidthExact(pickedMode, w, h, &pickedMode, &pickedW, &pickedH))
+        {
+            // User cancel -> fallback: dein AGA/RTG Auto-Fallback unten
+            break;
+        }
+
+        if (ModeFitsWidthExactHeightMin(pickedW, pickedH, w, h))
+        {
+            SaveModeFile(slotPath, pickedMode, pickedW, pickedH);
+            return pickedMode;
+        }
+
+        // sollte wegen MaxWidth=reqW praktisch nie passieren,
+        // aber zur Sicherheit:
+    }
+}
 		
 	if (usingAGA)
 	{
@@ -351,7 +476,7 @@ ULONG GetMode(int w, int h)
 
     while ((modeID = NextDisplayInfo(modeID)) != INVALID_ID)
     {
-#ifndef USEAGA		
+#if !defined(USEAGA) && !defined(USEGRAFFITI)
 	if (CyberGfxBase!=0)
 	{
 			if (!IsCyberModeID(modeID)) continue;
@@ -407,6 +532,8 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
 	int mode = GetMode(width,height);
 	FILE *fil;
 	
+	if (!LowLevelBase) LowLevelBase = OpenLibrary("lowlevel.library",0);
+	
     // Allocate memory for the MssAmigaScreen structure
     struct MssAmigaScreen *amigaScreen = (struct MssAmigaScreen *)malloc(sizeof(struct MssAmigaScreen));
     if (!amigaScreen) return NULL;  // Error allocating memory
@@ -428,17 +555,19 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
 	{
 		if (usingAGA) 
 		{
-			fprintf(stderr,"Running Settlers 2 in AGA Mode\n");
-			if (usingWCP) fprintf(stderr,"Using WriteChunkyPixels for ScreenRefresh\n");
-			else fprintf(stderr,"Using c2p for ScreenRefresh\n");
+			//fprintf(stderr,"Running Settlers 2 in AGA Mode\n");
+			//if (usingWCP) fprintf(stderr,"Using WriteChunkyPixels for ScreenRefresh\n");
+		//	else fprintf(stderr,"Using c2p for ScreenRefresh\n");
 		}
 		else 
 		{
-			fprintf(stderr,"Running Settlers2 in Graphics Board Mode\n");
+		//	fprintf(stderr,"Running Settlers2 in Graphics Board Mode\n");
 			usingWCP = 1;
 		}
 	}
 	firstTimeConfig = 1;	
+
+	//fullscreen = 0;
 
     if (fullscreen)
     {
@@ -452,6 +581,10 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
             { SA_Type, CUSTOMSCREEN },  // Custom screen for fullscreen
             { SA_Title, (ULONG)title }, // Screen title
             { SA_DisplayID, mode }, // AGA Lores Mode (adjust as needed)
+#ifdef USEGRAFFITI
+    { SA_Quiet, TRUE },
+    { SA_ShowTitle, FALSE },
+#endif
             { TAG_END }
         };
         amigaScreen->screen = OpenScreenTagList(NULL, screenTags);
@@ -522,6 +655,7 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
         return NULL;			
 		}
 	
+		//ClearPointer(amigaScreen->window);
 		SetPointer(amigaScreen->window, (UWORD*)amigaScreen->pointer, 1, 16, 0, 0);		
 	}
 	else amigaScreen->pointer = 0;
@@ -532,6 +666,38 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
 	}
 
 	mssAmigaScreen = amigaScreen;
+	
+	/*amigaScreen->bitMap = AllocBitMap(width, height, depth, BMF_DISPLAYABLE | BMF_CLEAR, NULL);
+	if (!amigaScreen->bitMap) 
+	{
+		// Handle error (cleanup screen, free resources, etc.)
+		return NULL;
+	}*/
+
+	// Allocate two ScreenBuffer structures
+	/*amigaScreen->screenBuffers[0] = AllocScreenBuffer(amigaScreen->screen, amigaScreen->bitMap, SB_SCREEN_BITMAP);
+	fprintf(stderr,"A1: %x\n",amigaScreen->screenBuffers[0]);
+	amigaScreen->screenBuffers[1] = AllocScreenBuffer(amigaScreen->screen, NULL,0);
+	fprintf(stderr,"A2: %x\n", amigaScreen->screenBuffers[1]);
+	if (!amigaScreen->screenBuffers[0] || !amigaScreen->screenBuffers[1]) 
+	{
+		// Handle error, clean up, free resources
+		if (amigaScreen->screenBuffers[0]) FreeScreenBuffer(amigaScreen->screen, amigaScreen->screenBuffers[0]);
+		if (amigaScreen->screenBuffers[1]) FreeScreenBuffer(amigaScreen->screen, amigaScreen->screenBuffers[1]);
+		FreeBitMap(amigaScreen->bitMap);
+		return NULL;
+	}*/
+	// Set up the RastPort to point to the bitmap (initially to the first buffer)
+	//InitRastPort(&amigaScreen->rastPort);
+	//amigaScreen->rastPort.BitMap = amigaScreen->bitMap;
+    // Initialize buffer toggle state
+	amigaScreen->bufferToggle = 0;	
+	//amigaScreen->rastPort.BitMap = amigaScreen->bitMap;	
+	/*if (!ChangeScreenBuffer(amigaScreen->screen, amigaScreen->screenBuffers[1-amigaScreen->bufferToggle]))
+	{
+		fprintf(stderr,"Failed to switch to Buffer 0\n");
+	}*/
+	//fprintf(stderr,"Writing to Buffer 1\n");
 
     // Return the structure as a void pointer
     return (void *)amigaScreen;
@@ -539,6 +705,25 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
 
 extern "C" void MSS_Flip(void *screen)
 {	    
+//WaitTOF();
+return;
+	MssAmigaScreen* amigaScreen = (MssAmigaScreen*)screen;
+	if (screen==0) return;
+	// Toggle between the two buffers
+    amigaScreen->bufferToggle = !amigaScreen->bufferToggle;
+	
+	fprintf(stderr,"Flipping to Buffer: %d Writing to Buffer %d\n",amigaScreen->bufferToggle,!amigaScreen->bufferToggle);
+
+    // Swap the buffers using ChangeScreenBuffer
+    if (!ChangeScreenBuffer(amigaScreen->screen, amigaScreen->screenBuffers[amigaScreen->bufferToggle])) 
+	{
+		fprintf(stderr,"ChangeScreenBuffer failed\n");
+        // Handle error if the buffer swap fails (optional)
+	}
+	
+// Update RastPort to point to the new back buffer (the one not being shown)
+    amigaScreen->rastPort.BitMap = amigaScreen->screenBuffers[!amigaScreen->bufferToggle]->sb_BitMap;
+	
 }
 
 ULONG colors[2 + 3 * 256];  // 2 for the count/first color and the terminator, 3 longs per color
@@ -575,6 +760,8 @@ extern "C" void MSS_SetColors(void *screenHandle, int startCol, int skipCols, in
 
 int currentLeftButton = 0;
 int currentRightButton = 0;
+int leftWentDown = 0;
+int rightWentDown = 0;
 MssEvent *lastEvent = 0;
 int rawKeyConvert(int rawkey)
 {
@@ -651,6 +838,7 @@ extern "C" void MSS_PumpEvents()
 				{
 
 					currentLeftButton = 1;
+					leftWentDown = 1;
 					newEvent.type = 4;  // Mouse button event
                     newEvent.key = 1;   // Left button
                     newEvent.state = currentLeftButton;
@@ -667,6 +855,7 @@ extern "C" void MSS_PumpEvents()
 				else if (msg->Code==IECODE_RBUTTON) 
 				{
 					currentRightButton = 1;
+					rightWentDown = 1;
 					newEvent.type = 4;  // Mouse button event
                     newEvent.key = 2;   // Right button
                     newEvent.state = currentRightButton;
@@ -734,8 +923,22 @@ extern "C" void MSS_PumpEvents()
 	}		
 }
 
+SDL_Joystick *joystick = 0;
+int joy_x = 160;
+int joy_y = 240;
+
+double lastJoyTimeUp = 0;
+double lastJoyTimeDown = 0;
+double lastJoyTimeLeft = 0;
+double lastJoyTimeRight = 0;
+int leftPressed = 0;
+int rightPressed = 0;
+
 extern "C" int MSS_GetMouseState(int *x, int *y)
 {
+	int l,r;
+	int joychanged = 0;
+    static struct MssEvent newEvent;    	
 	int mouseButtons;
     struct MssAmigaScreen *amigaScreen = (struct MssAmigaScreen *)mssAmigaScreen; // Assuming mssAmigaScreen is a global pointer to your MssAmigaScreen
     if (!amigaScreen || !amigaScreen->window) return 0;
@@ -750,17 +953,128 @@ extern "C" int MSS_GetMouseState(int *x, int *y)
 		*y = *y - amigaScreen->window->BorderTop;
 	}
 	
+	l = currentLeftButton;
+	r = currentRightButton;
 	mouseButtons = 0;
-	if (currentLeftButton) 
-	{
-		mouseButtons|=1;
-	}
-	if (currentRightButton)
-	{
-		mouseButtons|=4;
-	}
+if (leftWentDown)  l = 1;
+if (rightWentDown) r = 1;
 
-    return mouseButtons;
+if (l) mouseButtons |= 1;
+if (r) mouseButtons |= 4;
+
+// Latches nach dem Auslesen löschen
+leftWentDown = 0;
+rightWentDown = 0;
+
+	if (LowLevelBase)
+	{
+		int joyState = 0;
+		
+		joyState = ReadJoyPort(1);
+		double currentTime = getCurrentTimeInMilliSeconds();  // Get the current time in milliseconds
+
+		joychanged = 0;
+		if (joyState&JPF_JOY_UP)
+		{
+				if (currentTime - lastJoyTimeUp > 31) 
+				{
+					if (joy_y>3) 
+					{
+						joy_y-=4;
+						joychanged = 1;
+					}
+					lastJoyTimeUp = currentTime;
+				}	
+		}
+		if (joyState&JPF_JOY_DOWN)
+		{
+			if (currentTime - lastJoyTimeDown > 31)
+			{
+				if (joy_y<475) 
+				{
+					joy_y+=4;
+					joychanged = 1;
+				}
+				lastJoyTimeDown = currentTime;
+			}
+		}
+		if (joyState&JPF_JOY_LEFT)
+		{
+			if (currentTime - lastJoyTimeLeft > 31)
+			{
+				if (joy_x>3) 
+				{
+					joy_x-=4;
+					joychanged = 1;
+				}
+				lastJoyTimeLeft = currentTime;
+			}
+		}
+		if (joyState&JPF_JOY_RIGHT)
+		{
+			if (currentTime - lastJoyTimeRight > 31)
+			{
+				if (joy_x<635) 
+				{
+					joychanged = 1;
+					joy_x+=4;         
+				}
+				lastJoyTimeRight = currentTime;
+			}
+		}
+		if ((joyState&JPF_BUTTON_RED)&&(leftPressed==0))
+		{
+			leftPressed = 1;
+			newEvent.type = 8;  // Second Mouse button event
+			newEvent.key = 1;   // Left button
+			newEvent.state = leftPressed;
+			pushEventToQueue(newEvent);	
+		}
+		else if (((joyState&JPF_BUTTON_RED)==0)&&(leftPressed==1))
+		{
+			leftPressed = 0;
+			newEvent.type = 8;  // Second Mouse button event
+			newEvent.key = 1;   // Left button
+			newEvent.state = leftPressed;
+			pushEventToQueue(newEvent);				
+		}
+		if ((joyState&JPF_BUTTON_BLUE)&&(rightPressed==0))
+		{
+			rightPressed = 1;
+			newEvent.type = 8;  // Second Mouse button event
+			newEvent.key = 2;   // Right button
+			newEvent.state = rightPressed;
+			pushEventToQueue(newEvent);				
+		}
+		else if (((joyState&JPF_BUTTON_BLUE)==0)&&(rightPressed==1))
+		{	
+			rightPressed = 0;
+			newEvent.type = 8;  // Second Mouse button event
+			newEvent.key = 2;   // Right button
+			newEvent.state = rightPressed;
+			pushEventToQueue(newEvent);	
+		}	
+		if (joychanged)
+		{
+			newEvent.type = 8;  // Second Mouse button event
+			newEvent.key = 3;   // Right button
+			newEvent.state = joy_x;
+			pushEventToQueue(newEvent);		
+			newEvent.type = 8;  // Second Mouse button event
+			newEvent.key = 4;   // Right button
+			newEvent.state = joy_y;
+			pushEventToQueue(newEvent);				
+		}
+	}
+	
+	int res;
+	
+	if (leftPressed) mouseButtons|=16;
+	if (rightPressed) mouseButtons|=32; 
+	
+	res = mouseButtons|(joychanged*8);
+
+    return res;
 }
 extern "C" int MSS_PeepKeyDownEvent(struct MssEvent *event)
 {
@@ -822,10 +1136,32 @@ extern "C" void MSS_LockScreen(void *screen)
     if (!mssScreen || !mssScreen->window) return;
 
     // Obtain the RastPort from the window
-    struct RastPort *rastPort = mssScreen->window->RPort;
+    struct RastPort *rp = mssScreen->window->RPort;
+	    if (!rp || !rp->BitMap)
+        return;
 
-    // Get the address of the first bitplane
-    mssScreen->videoMemoryAddress = (ULONG)rastPort->BitMap->Planes[0]; // Address of Bitplane0
+#ifdef USEGRAFFITI
+    struct BitMap *bm = rp->BitMap;
+
+    // Graffiti: expect chunky framebuffer at Planes[0] with valid BytesPerRow.
+    if (!bm->Planes[0])
+        return;
+
+    mssScreen->videoMemoryAddress = (ULONG)bm->Planes[0];
+    mssScreen->bytesPerRow        = (ULONG)bm->BytesPerRow;
+
+    // Basic sanity: don't let a bogus pitch pass
+    if (mssScreen->bytesPerRow < (ULONG)mssScreen->width)
+    {
+        // If this triggers, you're likely NOT on a Graffiti chunky bitmap.
+        mssScreen->videoMemoryAddress = 0;
+        mssScreen->bytesPerRow = 0;
+        return;
+    }
+#else
+    // AGA/other: original behavior (planar address of first bitplane)
+    mssScreen->videoMemoryAddress = (ULONG)rp->BitMap->Planes[0];
+#endif
 }
 
 extern "C" void MSS_UnlockScreen(void *screen)
@@ -838,46 +1174,80 @@ struct Soff
  int y;
 };
 
-extern "C" void c2p1x1_8_c5_bm_040(int chunkyx __asm("d0"), int chunkyy __asm("d1"), int offsx __asm("d2"), int offsy __asm("d3"), void* c2pscreen __asm("a0"), struct BitMap* bitmap __asm("a1"));
+//extern "C" void c2p1x1_8_c5_bm_040(int chunkyx __asm("d0"), int chunkyy __asm("d1"), int offsx __asm("d2"), int offsy __asm("d3"), void* c2pscreen __asm("a0"), struct BitMap* bitmap __asm("a1"));
 
 extern "C" void MSS_DrawArray(void *screen, unsigned char* src, unsigned int x, unsigned int y, unsigned int w, unsigned int h, unsigned int srcwidth, unsigned int dstwidth)
 {
-		struct MssAmigaScreen *amigaScreen;
-		
-		amigaScreen = (struct MssAmigaScreen*)screen;
-		if (!amigaScreen) return;
-		
-		struct RastPort *rastPort;
-		rastPort = amigaScreen->window->RPort;
-        if (src == nullptr || rastPort == nullptr) 
-	    {
-            return; // Handle null pointers
+    struct MssAmigaScreen *amigaScreen = (struct MssAmigaScreen*)screen;
+    if (!amigaScreen || !amigaScreen->window || !amigaScreen->window->RPort || !src)
+        return;
+
+    struct RastPort *rastPort = amigaScreen->window->RPort;
+
+    // Compute destination start in the window bitmap coordinates.
+    UWORD xstart = (UWORD)x;
+    UWORD ystart = (UWORD)y;
+
+    if (!amigaScreen->fullscreen)
+    {
+        xstart += amigaScreen->window->BorderLeft;
+        ystart += amigaScreen->window->BorderTop;
+    }
+
+    UWORD xstop  = xstart + (UWORD)w - 1;
+    UWORD ystop  = ystart + (UWORD)h - 1;
+
+#ifdef USEGRAFFITI
+    // Ensure MSS_LockScreen was called (or we can derive it here defensively)
+    if (amigaScreen->videoMemoryAddress == 0 || amigaScreen->bytesPerRow == 0)
+    {
+        // Try to derive quickly (same logic as MSS_LockScreen)
+        struct BitMap *bm = rastPort->BitMap;
+        if (!bm || !bm->Planes[0]) return;
+
+        amigaScreen->videoMemoryAddress = (ULONG)bm->Planes[0];
+        amigaScreen->bytesPerRow        = (ULONG)bm->BytesPerRow;
+        if (amigaScreen->bytesPerRow < (ULONG)amigaScreen->width) return;
+    }
+
+    UBYTE *dst = (UBYTE*)amigaScreen->videoMemoryAddress
+               + (ULONG)ystart * amigaScreen->bytesPerRow
+               + (ULONG)xstart;
+
+    // Copy line by line (pitch-aware). We ignore dstwidth because Graffiti pitch is bytesPerRow.
+    for (unsigned int row = 0; row < h; row++)
+    {
+        memcpy(dst, src, w);
+        src += srcwidth;
+        dst += amigaScreen->bytesPerRow;
+    }
+    return;
+#endif
+
+    // ---- Original logic below (AGA/RTG paths) ----
+    if (!usingAGA)
+    {
+        WriteChunkyPixels(rastPort, xstart, ystart, xstop, ystop, src, amigaScreen->width);
+        return;
+    }
+
+    if (w != 320)
+    {
+        WriteChunkyPixels(rastPort, xstart, ystart, xstop, ystop, src, amigaScreen->width);
+    }
+    else
+    {
+        if (amigaScreen->fullscreen == 0) usingWCP = 1;
+        if (!usingWCP)
+        {
+            // c2p path (disabled in your file right now)
+            // c2p1x1_8_c5_bm_040(w, h, 0, 0, src, rastPort->BitMap);
         }
-
-		UWORD xstart = x+amigaScreen->window->BorderLeft;
-		UWORD ystart = y+amigaScreen->window->BorderTop;
-		UWORD xstop = xstart + w - 1; // 319
-		UWORD ystop = ystart + h - 1; // 239
-
-		if (!usingAGA)
-		{
-			WriteChunkyPixels(rastPort,xstart,ystart,xstop,ystop,src,amigaScreen->width);
-			return;
-		}
-		if (w!=320)
-		{
-			WriteChunkyPixels(rastPort,xstart,ystart,xstop,ystop,src,amigaScreen->width);
-		}
-		else
-		{
-			if (amigaScreen->fullscreen==0) usingWCP = 1;
-			if (!usingWCP) 
-			{
-				c2p1x1_8_c5_bm_040(w,h,0,0,src,rastPort->BitMap);
-			}
-			else WriteChunkyPixels(rastPort,xstart,ystart,xstop,ystop,src,amigaScreen->width);
-		}
-		if (w>40) WaitTOF();
+        else
+        {
+            WriteChunkyPixels(rastPort, xstart, ystart, xstop, ystop, src, amigaScreen->width);
+        }
+    }
 }
 
 extern "C" void* MSS_GetWindow(void *screen) 
