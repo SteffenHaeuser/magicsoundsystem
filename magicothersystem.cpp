@@ -14,6 +14,8 @@
 #include <intuition/icclass.h> // Intuition IDCMP classes (event classes)
 #include <workbench/startup.h> // Workbench startup structures (optional, depending on your needs)
 #include <SDL/SDL.h>
+#include <cybergraphics/cybergraphics.h>
+#include <proto/cybergraphics.h>
 
 #include <exec/types.h>
 #include <intuition/screens.h>
@@ -306,10 +308,16 @@ extern "C" void MSS_CloseScreen(void *screenHandle)
 		CloseLibrary(LowLevelBase);
 		LowLevelBase = 0;
 	}
+	if (CyberGfxBase)
+	{
+		CloseLibrary(CyberGfxBase);
+		CyberGfxBase=0;
+	}
 }
 
 #ifndef USEAGA
 #include <proto/cybergraphics.h>
+extern struct Library *CyberGfxBase;
 #endif
 int usingAGA = 0;
 int firstTimeConfig = 0;
@@ -407,6 +415,8 @@ if (FileExists("env:Settlers2/UseReq"))
     const int isMenu = (w == 640);  // “Menu” Slot per Breite erkennbar
     const char *slotPath = isMenu ? "env:Settlers2/ModeMenu"
                                   : "env:Settlers2/ModeGame";
+    const char *slotPath2 = isMenu ? "envarc:Settlers2/ModeMenu"
+                                  : "envarc:Settlers2/ModeGame";
 
     ULONG storedMode = INVALID_ID;
     int storedW = 0, storedH = 0;
@@ -434,6 +444,7 @@ if (FileExists("env:Settlers2/UseReq"))
         if (ModeFitsWidthExactHeightMin(pickedW, pickedH, w, h))
         {
             SaveModeFile(slotPath, pickedMode, pickedW, pickedH);
+			SaveModeFile(slotPath2, pickedMode, pickedW, pickedH);
             return pickedMode;
         }
 
@@ -527,12 +538,77 @@ if (FileExists("env:Settlers2/UseReq"))
     // Here, we either have a mode that roughly matches, or none
     return bestMode;
 }
+
+
+static int   gNoDirectWrite = 0;   /* 1 => immer WriteChunkyPixels */
+static int   gDirectWriteInit = 0; /* env schon geprüft? */
+
+static APTR  gCgxBase  = NULL;
+static ULONG gCgxPitch = 0;
+static ULONG gCgxPixFmt = 0;
+static struct BitMap* gCgxBM = NULL;
+
+static int MSS_CGXProbeAddress(struct RastPort* rp)
+{
+    if (!rp) return 0;
+
+    struct BitMap* bm = rp->BitMap;
+    if (!bm) return 0;
+
+    APTR  base = NULL;
+    ULONG pitch = 0;
+    ULONG pixfmt = 0;
+
+    ULONG lock = (ULONG)LockBitMapTags(bm,
+                                LBMI_BASEADDRESS, (ULONG)&base,
+                                LBMI_BYTESPERROW, (ULONG)&pitch,
+                                LBMI_PIXFMT,      (ULONG)&pixfmt,
+                                TAG_DONE);
+
+    if (!lock || !base || !pitch)
+    {
+        if (lock) UnLockBitMap((APTR)lock);
+        return 0;
+    }
+
+    UnLockBitMap((APTR)lock);
+
+    if (pixfmt != PIXFMT_LUT8)
+        return 0;
+
+    gCgxBM = bm;
+    gCgxBase = base;
+    gCgxPitch = pitch;
+    gCgxPixFmt = pixfmt;
+    return 1;
+}
+
 extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen, char *title)
 {
 	int mode = GetMode(width,height);
 	FILE *fil;
 	
+	if (!gDirectWriteInit)
+	{
+		FILE* f = fopen("env:Settlers2/NoDirectWrite", "r");
+		if (f) { fclose(f); gNoDirectWrite = 1; }
+
+		/* optional: envarc als fallback */
+		if (!gNoDirectWrite)
+		{
+			f = fopen("envarc:Settlers2/NoDirectWrite", "r");
+			if (f) { fclose(f); gNoDirectWrite = 1; }
+		}	
+
+		gDirectWriteInit = 1;
+	}	
+	
 	if (!LowLevelBase) LowLevelBase = OpenLibrary("lowlevel.library",0);
+	if (!CyberGfxBase) CyberGfxBase = OpenLibrary("cybergraphics.library",0);
+	if (!CyberGfxBase) 
+	{
+		gNoDirectWrite = 1;
+	}
 	
     // Allocate memory for the MssAmigaScreen structure
     struct MssAmigaScreen *amigaScreen = (struct MssAmigaScreen *)malloc(sizeof(struct MssAmigaScreen));
@@ -667,39 +743,21 @@ extern "C" void *MSS_OpenScreen(int width, int height, int depth, int fullscreen
 
 	mssAmigaScreen = amigaScreen;
 	
-	/*amigaScreen->bitMap = AllocBitMap(width, height, depth, BMF_DISPLAYABLE | BMF_CLEAR, NULL);
-	if (!amigaScreen->bitMap) 
-	{
-		// Handle error (cleanup screen, free resources, etc.)
-		return NULL;
-	}*/
-
-	// Allocate two ScreenBuffer structures
-	/*amigaScreen->screenBuffers[0] = AllocScreenBuffer(amigaScreen->screen, amigaScreen->bitMap, SB_SCREEN_BITMAP);
-	fprintf(stderr,"A1: %x\n",amigaScreen->screenBuffers[0]);
-	amigaScreen->screenBuffers[1] = AllocScreenBuffer(amigaScreen->screen, NULL,0);
-	fprintf(stderr,"A2: %x\n", amigaScreen->screenBuffers[1]);
-	if (!amigaScreen->screenBuffers[0] || !amigaScreen->screenBuffers[1]) 
-	{
-		// Handle error, clean up, free resources
-		if (amigaScreen->screenBuffers[0]) FreeScreenBuffer(amigaScreen->screen, amigaScreen->screenBuffers[0]);
-		if (amigaScreen->screenBuffers[1]) FreeScreenBuffer(amigaScreen->screen, amigaScreen->screenBuffers[1]);
-		FreeBitMap(amigaScreen->bitMap);
-		return NULL;
-	}*/
-	// Set up the RastPort to point to the bitmap (initially to the first buffer)
-	//InitRastPort(&amigaScreen->rastPort);
-	//amigaScreen->rastPort.BitMap = amigaScreen->bitMap;
-    // Initialize buffer toggle state
 	amigaScreen->bufferToggle = 0;	
-	//amigaScreen->rastPort.BitMap = amigaScreen->bitMap;	
-	/*if (!ChangeScreenBuffer(amigaScreen->screen, amigaScreen->screenBuffers[1-amigaScreen->bufferToggle]))
+		
+	if (!usingAGA && !gNoDirectWrite)
+	{	
+		(void)MSS_CGXProbeAddress(amigaScreen->window->RPort);
+	}
+	else
 	{
-		fprintf(stderr,"Failed to switch to Buffer 0\n");
-	}*/
-	//fprintf(stderr,"Writing to Buffer 1\n");
+		/* Cache invalidieren (sicher) */
+		gCgxBM = NULL;
+		gCgxBase = NULL;
+		gCgxPitch = 0;
+		gCgxPixFmt = 0;
+	}		
 
-    // Return the structure as a void pointer
     return (void *)amigaScreen;
 }
 
@@ -832,45 +890,48 @@ extern "C" void MSS_PumpEvents()
 	{
 		switch (msg->Class)
 		{
-			case IDCMP_MOUSEBUTTONS:
-			{
-				if (msg->Code==IECODE_LBUTTON) 
-				{
+case IDCMP_MOUSEBUTTONS:
+{
+    if (msg->Code == IECODE_LBUTTON)
+    {
+        currentLeftButton = 1;
+        leftWentDown = 1;
 
-					currentLeftButton = 1;
-					leftWentDown = 1;
-					newEvent.type = 4;  // Mouse button event
-                    newEvent.key = 1;   // Left button
-                    newEvent.state = currentLeftButton;
-                    pushEventToQueue(newEvent);				
-				} 
-				else if (msg->Code==IECODE_LBUTTON+128)
-				{
-						currentLeftButton = 0;
-						newEvent.type = 4;  // Mouse button event
-						newEvent.key = 1;   // Left button
-						newEvent.state = currentLeftButton;
-						pushEventToQueue(newEvent);									
-				}
-				else if (msg->Code==IECODE_RBUTTON) 
-				{
-					currentRightButton = 1;
-					rightWentDown = 1;
-					newEvent.type = 4;  // Mouse button event
-                    newEvent.key = 2;   // Right button
-                    newEvent.state = currentRightButton;
-                    pushEventToQueue(newEvent);						
-				}
-				else if (msg->Code==IECODE_RBUTTON+128)
-				{
-						currentRightButton = 0;
-						newEvent.type = 4;  // Mouse button event
-						newEvent.key = 2;   // Left button
-						newEvent.state = currentRightButton;
-						pushEventToQueue(newEvent);								
-				}
-			}			
-			break;
+        newEvent.type = 4;
+        newEvent.key = 1;
+        newEvent.state = 1;
+        pushEventToQueue(newEvent);
+    }
+    else if (msg->Code == (IECODE_LBUTTON | IECODE_UP_PREFIX))
+    {
+        currentLeftButton = 0;
+
+        newEvent.type = 4;
+        newEvent.key = 1;
+        newEvent.state = 0;
+        pushEventToQueue(newEvent);
+    }
+    else if (msg->Code == IECODE_RBUTTON)
+    {
+        currentRightButton = 1;
+        rightWentDown = 1;
+
+        newEvent.type = 4;
+        newEvent.key = 2;
+        newEvent.state = 1;
+        pushEventToQueue(newEvent);
+    }
+    else if (msg->Code == (IECODE_RBUTTON | IECODE_UP_PREFIX))
+    {
+        currentRightButton = 0;
+
+        newEvent.type = 4;
+        newEvent.key = 2;
+        newEvent.state = 0;
+        pushEventToQueue(newEvent);
+    }
+}
+break;
 			case IDCMP_RAWKEY:
 			{
 				int vanillaKey;
@@ -956,16 +1017,10 @@ extern "C" int MSS_GetMouseState(int *x, int *y)
 	l = currentLeftButton;
 	r = currentRightButton;
 	mouseButtons = 0;
-if (leftWentDown)  l = 1;
-if (rightWentDown) r = 1;
 
 if (l) mouseButtons |= 1;
 if (r) mouseButtons |= 4;
-
-// Latches nach dem Auslesen löschen
-leftWentDown = 0;
-rightWentDown = 0;
-
+#if 0
 	if (LowLevelBase)
 	{
 		int joyState = 0;
@@ -1073,6 +1128,9 @@ rightWentDown = 0;
 	if (rightPressed) mouseButtons|=32; 
 	
 	res = mouseButtons|(joychanged*8);
+#else
+	int res = mouseButtons;
+#endif
 
     return res;
 }
@@ -1174,8 +1232,21 @@ struct Soff
  int y;
 };
 
-//extern "C" void c2p1x1_8_c5_bm_040(int chunkyx __asm("d0"), int chunkyy __asm("d1"), int offsx __asm("d2"), int offsy __asm("d3"), void* c2pscreen __asm("a0"), struct BitMap* bitmap __asm("a1"));
+#ifdef __cplusplus
+extern "C" {
+#endif
+void ApolloCopyPicture32(void* src, void* dst,
+                         unsigned int wBytes, unsigned int h,
+                         unsigned int smod, unsigned int dmod);
+#ifdef __cplusplus
+}
+#endif
 
+extern "C" void c2p1x1_8_c5_bm_040(int chunkyx __asm("d0"), int chunkyy __asm("d1"), int offsx __asm("d2"), int offsy __asm("d3"), void* c2pscreen __asm("a0"), struct BitMap* bitmap __asm("a1"));
+
+int outputdone = 0;
+
+#if USEAGA // AGA Variante
 extern "C" void MSS_DrawArray(void *screen, unsigned char* src, unsigned int x, unsigned int y, unsigned int w, unsigned int h, unsigned int srcwidth, unsigned int dstwidth)
 {
     struct MssAmigaScreen *amigaScreen = (struct MssAmigaScreen*)screen;
@@ -1238,10 +1309,11 @@ extern "C" void MSS_DrawArray(void *screen, unsigned char* src, unsigned int x, 
     else
     {
         if (amigaScreen->fullscreen == 0) usingWCP = 1;
+	usingWCP=1;
         if (!usingWCP)
         {
             // c2p path (disabled in your file right now)
-            // c2p1x1_8_c5_bm_040(w, h, 0, 0, src, rastPort->BitMap);
+            c2p1x1_8_c5_bm_040(w, h, 0, 0, src, rastPort->BitMap);
         }
         else
         {
@@ -1249,6 +1321,107 @@ extern "C" void MSS_DrawArray(void *screen, unsigned char* src, unsigned int x, 
         }
     }
 }
+#else
+extern "C" void MSS_DrawArray(void *screen, unsigned char* src, unsigned int x, unsigned int y, unsigned int w, unsigned int h, unsigned int srcwidth, unsigned int dstwidth)
+{
+    struct MssAmigaScreen *amigaScreen = (struct MssAmigaScreen*)screen;
+    if (!amigaScreen || !amigaScreen->window || !amigaScreen->window->RPort || !src)
+        return;
+
+    struct RastPort *rastPort = amigaScreen->window->RPort;
+
+    // Compute destination start in the window bitmap coordinates.
+    UWORD xstart = (UWORD)x;
+    UWORD ystart = (UWORD)y;
+
+    if (!amigaScreen->fullscreen)
+    {
+        xstart += amigaScreen->window->BorderLeft;
+        ystart += amigaScreen->window->BorderTop;
+    }
+
+    UWORD xstop  = xstart + (UWORD)w - 1;
+    UWORD ystop  = ystart + (UWORD)h - 1;
+
+#ifdef USEGRAFFITI
+    // Ensure MSS_LockScreen was called (or we can derive it here defensively)
+    if (amigaScreen->videoMemoryAddress == 0 || amigaScreen->bytesPerRow == 0)
+    {
+        // Try to derive quickly (same logic as MSS_LockScreen)
+        struct BitMap *bm = rastPort->BitMap;
+        if (!bm || !bm->Planes[0]) return;
+
+        amigaScreen->videoMemoryAddress = (ULONG)bm->Planes[0];
+        amigaScreen->bytesPerRow        = (ULONG)bm->BytesPerRow;
+        if (amigaScreen->bytesPerRow < (ULONG)amigaScreen->width) return;
+    }
+
+    UBYTE *dst = (UBYTE*)amigaScreen->videoMemoryAddress
+               + (ULONG)ystart * amigaScreen->bytesPerRow
+               + (ULONG)xstart;
+
+    // Copy line by line (pitch-aware). We ignore dstwidth because Graffiti pitch is bytesPerRow.
+    for (unsigned int row = 0; row < h; row++)
+    {
+        memcpy(dst, src, w);
+        src += srcwidth;
+        dst += amigaScreen->bytesPerRow;
+    }
+    return;
+#endif
+if (!usingAGA)
+{
+    if (gNoDirectWrite)
+    {
+        WriteChunkyPixels(rastPort, xstart, ystart, xstop, ystop, src, amigaScreen->width);
+        return;
+    }
+
+    /* Cache leer oder BitMap gewechselt? -> neu probe-locken */
+    if (!gCgxBase || !gCgxPitch || gCgxBM != rastPort->BitMap || gCgxPixFmt != PIXFMT_LUT8)
+    {
+        if (!MSS_CGXProbeAddress(rastPort))
+        {
+            WriteChunkyPixels(rastPort, xstart, ystart, xstop, ystop, src, amigaScreen->width);
+            return;
+        }
+    }
+
+    UBYTE* base  = (UBYTE*)gCgxBase;
+    ULONG  pitch = gCgxPitch;
+
+    UBYTE* dst = base + (ULONG)ystart * pitch + (ULONG)xstart;
+
+    /* Fast path */
+    if (((w & 31u) == 0) &&
+        ((((ULONG)(uintptr_t)src) & 3u) == 0) &&
+        ((((ULONG)(uintptr_t)dst) & 3u) == 0) &&
+        (srcwidth >= w) &&
+        (pitch    >= w))
+    {
+        unsigned int smod = (unsigned int)(srcwidth - w);
+        unsigned int dmod = (unsigned int)(pitch    - w);
+		//if (!outputdone) fprintf(stderr,"Using ChunkyCopy ASM\n");
+		outputdone=1;
+        ApolloCopyPicture32(src, dst, w, h, smod, dmod);
+        return;
+    }
+
+    /* Fallback: memcpy */
+    {
+        UBYTE* d = dst;
+        UBYTE* s = src;
+        for (unsigned int row = 0; row < h; ++row)
+        {
+            memcpy(d, s, w);
+            s += srcwidth;
+            d += pitch;
+        }
+        return;
+    }
+}
+}	
+#endif
 
 extern "C" void* MSS_GetWindow(void *screen) 
 {
